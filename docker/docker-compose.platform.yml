@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  caddy:
+    image: caddy:2.7-alpine
+    container_name: panel-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - panel-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: panel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-panel}
+      POSTGRES_USER: ${POSTGRES_USER:-panel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-panel}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - panel-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-panel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: panel-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - panel-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  django:
+    build:
+      context: ..
+      dockerfile: docker/django/Dockerfile
+    container_name: panel-django
+    restart: unless-stopped
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - POSTGRES_DB=${POSTGRES_DB:-panel}
+      - POSTGRES_USER=${POSTGRES_USER:-panel}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-panel}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DOCKER_SOCKET=/var/run/docker.sock
+      - DEPLOYMENTS_DIR=/app/deployments
+      - BASE_DOMAIN=${BASE_DOMAIN:-localhost}
+      - PANEL_DOMAIN=${PANEL_DOMAIN:-}
+      - SERVER_IP=${SERVER_IP:-127.0.0.1}
+      - CADDY_ADMIN_API=http://caddy:2019
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - deployments:/app/deployments
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - panel-net
+    command: gunicorn dj_panel.wsgi:application --bind 0.0.0.0:8000 --workers 4
+
+  celery:
+    build:
+      context: ..
+      dockerfile: docker/django/Dockerfile
+    container_name: panel-celery
+    restart: unless-stopped
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - POSTGRES_DB=${POSTGRES_DB:-panel}
+      - POSTGRES_USER=${POSTGRES_USER:-panel}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-panel}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DOCKER_SOCKET=/var/run/docker.sock
+      - DEPLOYMENTS_DIR=/app/deployments
+      - BASE_DOMAIN=${BASE_DOMAIN:-localhost}
+      - PANEL_DOMAIN=${PANEL_DOMAIN:-}
+      - SERVER_IP=${SERVER_IP:-127.0.0.1}
+      - CADDY_ADMIN_API=http://caddy:2019
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - deployments:/app/deployments
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - panel-net
+    command: celery -A dj_panel.celery worker --loglevel=info
+
+volumes:
+  caddy_data:
+  caddy_config:
+  db_data:
+  redis_data:
+  deployments:
+
+networks:
+  panel-net:
+    driver: bridge

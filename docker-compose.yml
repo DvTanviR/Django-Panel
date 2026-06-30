@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  caddy:
+    image: caddy:2.7-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"
+    volumes:
+      - ./docker/caddy_data:/data
+      - ./docker/caddy_config:/config
+    networks:
+      - panel-net
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: panel
+      POSTGRES_USER: panel
+      POSTGRES_PASSWORD: panel
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - panel-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U panel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - panel-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  django:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SECRET_KEY=dev-secret-key-change-me
+      - DJANGO_DEBUG=True
+      - POSTGRES_DB=panel
+      - POSTGRES_USER=panel
+      - POSTGRES_PASSWORD=panel
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ENCRYPTION_KEY=dev-encryption-key
+      - DOCKER_SOCKET=/var/run/docker.sock
+      - DEPLOYMENTS_DIR=/app/deployments
+      - BASE_DOMAIN=localhost
+      - SERVER_IP=127.0.0.1
+      - CADDY_ADMIN_API=http://caddy:2019
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./deployments:/app/deployments
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - panel-net
+    command: python manage.py runserver 0.0.0.0:8000
+
+  celery:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      - DJANGO_SECRET_KEY=dev-secret-key-change-me
+      - DJANGO_DEBUG=True
+      - POSTGRES_DB=panel
+      - POSTGRES_USER=panel
+      - POSTGRES_PASSWORD=panel
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ENCRYPTION_KEY=dev-encryption-key
+      - DOCKER_SOCKET=/var/run/docker.sock
+      - DEPLOYMENTS_DIR=/app/deployments
+      - BASE_DOMAIN=localhost
+      - SERVER_IP=127.0.0.1
+      - CADDY_ADMIN_API=http://caddy:2019
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./deployments:/app/deployments
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      django:
+        condition: service_started
+    networks:
+      - panel-net
+    command: celery -A dj_panel.celery worker --loglevel=info
+
+volumes:
+  db_data:
+  redis_data:
+
+networks:
+  panel-net:
+    driver: bridge
