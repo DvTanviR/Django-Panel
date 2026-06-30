@@ -35,8 +35,10 @@ def update_caddy_route(project, domain):
         
         server_name = settings.BASE_DOMAIN
         if server_name not in servers:
+            https_port = getattr(settings, 'CADDY_HTTPS_PORT', '8443')
+            http_port = getattr(settings, 'CADDY_HTTP_PORT', '8080')
             servers[server_name] = {
-                'listen': [':443'],
+                'listen': [f':{https_port}', f':{http_port}'],
                 'routes': []
             }
         

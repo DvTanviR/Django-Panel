@@ -36,7 +36,7 @@ The installer does everything automatically:
 After install finishes, open your browser:
 
 ```
-http://YOUR-SERVER-IP:8000
+http://YOUR-SERVER-IP:9000
 ```
 
 Login with:
@@ -66,7 +66,7 @@ You'll see the dashboard with no projects yet.
 
 Your app is reachable at:
 ```
-http://<project-slug>.localhost
+http://<project-slug>.apps.localhost:8080
 ```
 
 ---
@@ -130,13 +130,30 @@ Everything runs in Docker containers on your VPS:
 
 | Service | Purpose | Port |
 |---------|---------|------|
-| Caddy | Reverse proxy + auto TLS | 80, 443, 2019 |
-| Django | Control plane / API | 8000 |
-| Celery | Async build/deploy worker | — |
-| Redis | Task queue | 6379 |
+| **DeployDjango Panel** | Control plane / GUI | **9000** |
+| Caddy | Reverse proxy + auto TLS for apps | **8080** (HTTP) / **8443** (HTTPS) |
 | PostgreSQL | Metadata database | 5432 |
+| Redis | Task queue | 6379 |
+| Celery | Async build/deploy worker | — |
 
-Your Django apps each run in **their own isolated container** with configurable CPU/memory limits, routed through Caddy.
+Your Django apps each run in **their own isolated container** and are routed through Caddy on ports **8080/8443** — completely separate from the panel on port **9000**.
+
+### Why Not Port 80/443?
+
+If you already run websites (Node.js, other Django apps, etc.) on port **80/443**, DeployDjango uses **different ports** so nothing conflicts:
+
+- Panel UI → `http://your-vps-ip:9000`
+- Deployed apps → `http://app-name.apps.localhost:8080` (or your custom domain on 8080/8443)
+- HTTPS apps → `https://app-name.yourdomain.com:8443`
+
+You can change these ports anytime in `/opt/deploydjango/.env`:
+
+```env
+PANEL_PORT=9000
+CADDY_HTTP_PORT=8080
+CADDY_HTTPS_PORT=8443
+BASE_DOMAIN=apps.localhost
+```
 
 ---
 
@@ -157,6 +174,110 @@ Your Django apps each run in **their own isolated container** with configurable 
 
 ---
 
+## Architecture
+
+```
+                            Internet
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │     Caddy v2         │
+                    │  Port 8080 / 8443    │
+                    │  Reverse Proxy       │
+                    │  Auto TLS            │
+                    │  Dynamic Routes      │
+                    └──────────┬───────────┘
+                               │
+                     ┌─────────▼─────────────────┐
+                     │    Django Control Plane   │
+                     │    http://vps:9000        │
+                     │    (DRF + Celery)         │
+                     │                          │
+                     │  Project Management      │
+                     │  Build/Deploy            │
+                     │  Webhook Handler         │
+                     │  Domain Manager          │
+                     └──────────┬───────────────┘
+                                │
+              ┌─────────────────┼─────────────────┐
+              │                 │                 │
+              ▼                 ▼                 ▼
+        ┌──────────┐     ┌──────────┐     ┌──────────┐
+        │  Celery  │     │  Redis   │     │Postgres  │
+        │  Worker  │     │  Queue   │     │   DB     │
+        └────┬─────┘     └──────────┘     └──────────┘
+```
+
+---
+
+## Data Model
+
+- **Project**: name, slug, repo URL, branch, status, resource limits
+- **Deployment**: commit SHA, status, image tag, build log, rollback support
+- **Domain**: hostname, DNS verification status, TLS status
+- **EnvironmentVariable**: encrypted at rest, secret masking in UI
+- **WebhookEvent**: audit trail of GitHub events
+
+---
+
+## Build Pipeline
+
+```
+Trigger (Webhook/Manual)
+    ↓
+Clone Repo (isolated workspace)
+    ↓
+Detect Framework (manage.py, requirements, Python version)
+    ↓
+Generate Dockerfile (if not in repo)
+    ↓
+Build Image (stream logs to UI)
+    ↓
+Run Container (with env vars + resource limits)
+    ↓
+Health Check (HTTP GET /, timeout 60s)
+    ↓
+Update Caddy Route (zero-downtime swap)
+    ↓
+Mark Deployment Healthy
+```
+
+---
+
+## Dockerfile Auto-Generation
+
+When no Dockerfile exists:
+1. Detect Python version from `.python-version`, `runtime.txt`, or `pyproject.toml`
+2. Install common system deps: `gcc`, `libpq-dev`, `build-essential`
+3. Install Python dependencies via `pip` or `poetry`
+4. Run `collectstatic --noinput` (gracefully)
+5. Detect WSGI/ASGI entrypoint
+6. Default CMD: `gunicorn` with configurable workers
+
+---
+
+## Domain + TLS Flow
+
+1. Admin enters `app.example.com`
+2. Panel shows DNS record (A/CNAME) with copy button
+3. Background task polls DNS until verified
+4. Caddy Admin API registers the route
+5. Let's Encrypt certificate auto-provisioned on first request
+6. TLS status reflected in GUI
+
+---
+
+## Security
+
+- All secrets encrypted at rest using Fernet (custom EncryptedTextField)
+- GitHub webhook HMAC signature verification
+- Build containers have no access to host Docker socket
+- DRF permissions + rate limiting on all endpoints
+- Resource limits (CPU/memory) on every user container
+- Django auth with token auth for API
+
+---
+
 ## Uninstall
 
 ```bash
@@ -168,14 +289,44 @@ This stops all containers and optionally wipes volumes (including your projects'
 
 ---
 
-## Tech Stack
+## Troubleshooting
 
-- **Backend**: Django + DRF (Python 3.12)
-- **Database**: PostgreSQL (Dockerized)
-- **Queue**: Celery + Redis (Dockerized)
-- **Frontend**: Next.js 14 + Tailwind CSS
-- **Proxy**: Caddy v2 (Admin API for dynamic routing + auto TLS)
-- **Runtime**: Docker Engine via docker-py
+**Build fails with "No module named 'psycopg2'"**
+- Ensure `libpq-dev` is installed. The auto-generated Dockerfile includes it by default.
+
+**Health check fails after deploy**
+- Check that your Django app binds to `0.0.0.0:8000`
+- Verify `ALLOWED_HOSTS` includes the incoming Host header
+- Check container logs: `docker logs app-<slug> --follow`
+
+**Caddy returns 404**
+- Verify the Caddy Admin API is reachable: `curl http://localhost:2019/config/`
+- Check that the domain route is registered in Caddy config
+
+**Webhook not triggering deploys**
+- Verify webhook is registered in GitHub repo settings
+- Check the webhook secret matches `GITHUB_WEBHOOK_SECRET` in `.env`
+
+**Celery tasks not running**
+- Check Redis: `docker compose exec redis redis-cli ping`
+- Verify Celery logs: `docker compose logs celery`
+
+**Permission denied on `.env`**
+- Re-run install script as root, or: `sudo chmod 600 .env`
+
+### Log Locations
+
+- Platform logs: `docker compose -f docker/docker-compose.platform.yml logs -f django`
+- Celery logs: `docker compose -f docker/docker-compose.platform.yml logs -f celery`
+- User app logs: `docker logs app-<project-slug> --follow`
+- Caddy logs: `docker logs panel-caddy --follow`
+
+### Reset
+
+```bash
+sudo ./uninstall.sh    # stops containers, optionally wipes volumes
+docker volume prune -f # remove Docker volumes
+```
 
 ---
 

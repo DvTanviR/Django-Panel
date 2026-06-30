@@ -129,11 +129,15 @@ WORKSPACE_DIR = DEPLOYMENTS_DIR / 'workspace'
 for d in [BUILDS_DIR, LOGS_DIR, WORKSPACE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost')
+BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'apps.localhost')
 PANEL_DOMAIN = os.getenv('PANEL_DOMAIN', '')
 SERVER_IP = os.getenv('SERVER_IP', '127.0.0.1')
 
 CADDY_ADMIN_API = os.getenv('CADDY_ADMIN_API', 'http://caddy:2019')
+
+PANEL_PORT = os.getenv('PANEL_PORT', '9000')
+CADDY_HTTP_PORT = os.getenv('CADDY_HTTP_PORT', '8080')
+CADDY_HTTPS_PORT = os.getenv('CADDY_HTTPS_PORT', '8443')
 
 GITHUB_APP_ID = os.getenv('GITHUB_APP_ID', '')
 GITHUB_APP_PRIVATE_KEY = os.getenv('GITHUB_APP_PRIVATE_KEY', '')

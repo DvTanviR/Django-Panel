@@ -147,7 +147,7 @@ def stop_container(container_id):
     except Exception as e:
         logger.warning(f"Could not stop container: {e}")
 
-def update_caddy(project_name, domain, port, base_domain='localhost'):
+def update_caddy(project_name, domain, port, base_domain='apps.localhost', https_port='8443', http_port='8080'):
     import requests
     caddy_api = 'http://localhost:2019'
     
@@ -159,7 +159,7 @@ def update_caddy(project_name, domain, port, base_domain='localhost'):
             "http": {
                 "servers": {
                     base_domain: {
-                        "listen": [":443"],
+                        "listen": [f":{https_port}", f":{http_port}"],
                         "routes": [
                             {
                                 "match": [{"host": [domain]}],

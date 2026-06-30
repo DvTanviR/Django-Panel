@@ -6,8 +6,8 @@ services:
     container_name: panel-caddy
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_HTTP_PORT:-8080}:8080"
+      - "${CADDY_HTTPS_PORT:-8443}:8443"
       - "2019:2019"
     volumes:
       - caddy_data:/data
@@ -66,11 +66,14 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - DOCKER_SOCKET=/var/run/docker.sock
       - DEPLOYMENTS_DIR=/app/deployments
-      - BASE_DOMAIN=${BASE_DOMAIN:-localhost}
+      - BASE_DOMAIN=${BASE_DOMAIN:-apps.localhost}
       - PANEL_DOMAIN=${PANEL_DOMAIN:-}
       - SERVER_IP=${SERVER_IP:-127.0.0.1}
       - CADDY_ADMIN_API=http://caddy:2019
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - PANEL_PORT=${PANEL_PORT:-9000}
+      - CADDY_HTTP_PORT=${CADDY_HTTP_PORT:-8080}
+      - CADDY_HTTPS_PORT=${CADDY_HTTPS_PORT:-8443}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - deployments:/app/deployments
@@ -81,7 +84,7 @@ services:
         condition: service_healthy
     networks:
       - panel-net
-    command: gunicorn dj_panel.wsgi:application --bind 0.0.0.0:8000 --workers 4
+    command: gunicorn dj_panel.wsgi:application --bind 0.0.0.0:${PANEL_PORT:-9000} --workers 4
 
   celery:
     build:
@@ -102,11 +105,14 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - DOCKER_SOCKET=/var/run/docker.sock
       - DEPLOYMENTS_DIR=/app/deployments
-      - BASE_DOMAIN=${BASE_DOMAIN:-localhost}
+      - BASE_DOMAIN=${BASE_DOMAIN:-apps.localhost}
       - PANEL_DOMAIN=${PANEL_DOMAIN:-}
       - SERVER_IP=${SERVER_IP:-127.0.0.1}
       - CADDY_ADMIN_API=http://caddy:2019
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - PANEL_PORT=${PANEL_PORT:-9000}
+      - CADDY_HTTP_PORT=${CADDY_HTTP_PORT:-8080}
+      - CADDY_HTTPS_PORT=${CADDY_HTTPS_PORT:-8443}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - deployments:/app/deployments
