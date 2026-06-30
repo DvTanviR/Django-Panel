@@ -124,10 +124,10 @@ echo "Waiting for services to be ready..."
 sleep 15
 
 echo "Running database migrations..."
-docker compose -f docker/docker-compose.platform.yml exec -T django python manage.py migrate
+docker compose -f docker/docker-compose.platform.yml exec -T django python django_panel/manage.py migrate
 
 echo "Creating admin user..."
-docker compose -f docker/docker-compose.platform.yml exec -T django python manage.py panel_app createadmin --username admin --password admin123 --email admin@example.com
+docker compose -f docker/docker-compose.platform.yml exec -T django python django_panel/manage.py panel_app createadmin --username admin --password admin123 --email admin@example.com
 
 IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 PANEL_PORT=${PANEL_PORT:-9000}

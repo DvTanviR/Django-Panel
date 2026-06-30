@@ -55,6 +55,7 @@ services:
     restart: unless-stopped
     environment:
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_SETTINGS_MODULE=django_panel.dj_panel.settings
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
       - POSTGRES_DB=${POSTGRES_DB:-panel}
       - POSTGRES_USER=${POSTGRES_USER:-panel}
@@ -84,7 +85,7 @@ services:
         condition: service_healthy
     networks:
       - panel-net
-    command: gunicorn dj_panel.wsgi:application --bind 0.0.0.0:${PANEL_PORT:-9000} --workers 4
+    command: gunicorn django_panel.dj_panel.wsgi:application --bind 0.0.0.0:${PANEL_PORT:-9000} --workers 4
 
   celery:
     build:
@@ -94,6 +95,7 @@ services:
     restart: unless-stopped
     environment:
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_SETTINGS_MODULE=django_panel.dj_panel.settings
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
       - POSTGRES_DB=${POSTGRES_DB:-panel}
       - POSTGRES_USER=${POSTGRES_USER:-panel}
@@ -123,7 +125,7 @@ services:
         condition: service_healthy
     networks:
       - panel-net
-    command: celery -A dj_panel.celery worker --loglevel=info
+    command: celery -A django_panel.dj_panel.celery worker --loglevel=info
 
 volumes:
   caddy_data:

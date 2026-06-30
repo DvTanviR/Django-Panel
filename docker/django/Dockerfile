@@ -15,6 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
-ENV DJANGO_SETTINGS_MODULE=dj_panel.settings
+ENV DJANGO_SETTINGS_MODULE=django_panel.dj_panel.settings
 
-CMD ["gunicorn", "dj_panel.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
+CMD ["gunicorn", "django_panel.dj_panel.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
