@@ -2,7 +2,7 @@
 set -e
 
 echo "=========================================="
-echo "DeployDjango Platform Uninstaller"
+echo "DeployDjango Uninstaller"
 echo "=========================================="
 echo ""
 
@@ -18,14 +18,17 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 else
     echo "Removing volumes including user data..."
     docker compose -f docker/docker-compose.platform.yml down -v
+    echo "Pruning unused Docker volumes..."
+    docker volume prune -f
 fi
 
 echo ""
-read -p "Remove $INSTALL_DIR completely? (y/N): " -n 1 -r
+read -p "Remove $INSTALL_DIR and CLI completely? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
+    rm -f /usr/local/bin/djpaas
     rm -rf "$INSTALL_DIR"
-    echo "Removed $INSTALL_DIR"
+    echo "Removed $INSTALL_DIR and djpaas CLI"
 fi
 
 echo "Uninstall complete."

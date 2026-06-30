@@ -8,7 +8,7 @@ echo ""
 
 # Check root
 if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root (sudo ./install.sh)"
+    echo "Please run as root (sudo bash install.sh)"
     exit 1
 fi
 
@@ -55,18 +55,25 @@ if ! docker compose version &> /dev/null; then
     apt-get install -y docker-compose-plugin
 fi
 
+mkdir -p /opt/deploydjango
 INSTALL_DIR="/opt/deploydjango"
-echo "Installing to $INSTALL_DIR"
 
-mkdir -p $INSTALL_DIR
-mkdir -p $INSTALL_DIR/{django_panel,frontend,docker,scripts,deployments}
+# If running from a cloned repo, copy files. Otherwise clone from GitHub.
+if [ -f "django_panel/manage.py" ]; then
+    echo "Copying from local repo..."
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    cp -r $SCRIPT_DIR/* $INSTALL_DIR/
+elif [ -d ".git" ]; then
+    echo "Copying from git repo..."
+    git archive --format=tar HEAD | tar -xf - -C $INSTALL_DIR/
+else
+    echo "Cloning from GitHub..."
+    git clone https://github.com/DvTanviR/Django-Panel.git $INSTALL_DIR
+fi
 
-# Copy files
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cp -r $SCRIPT_DIR/* $INSTALL_DIR/
+cd $INSTALL_DIR
 
 # Create .env file
-cd $INSTALL_DIR
 if [ ! -f .env ]; then
     echo "Generating secrets..."
     SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(50))")
@@ -89,40 +96,48 @@ ENCRYPTION_KEY=$ENCRYPTION_KEY
 DOCKER_SOCKET=/var/run/docker.sock
 DEPLOYMENTS_DIR=/app/deployments
 BASE_DOMAIN=localhost
-SERVER_IP=$(curl -s ifconfig.me || echo "127.0.0.1")
+SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "127.0.0.1")
 CADDY_ADMIN_API=http://caddy:2019
 GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET
 EOF
     chmod 600 .env
 fi
 
-# Create systemd user service or docker-compose up
 # Install CLI
 echo "Installing djpaas CLI..."
 cp $INSTALL_DIR/scripts/djpaas /usr/local/bin/djpaas
 chmod +x /usr/local/bin/djpaas
 
+# Start platform
+echo ""
+echo "Starting platform services..."
+docker compose -f docker/docker-compose.platform.yml up -d
+
+echo "Waiting for services to be ready..."
+sleep 15
+
+echo "Running database migrations..."
+docker compose -f docker/docker-compose.platform.yml exec django python manage.py migrate
+
+echo "Creating admin user..."
+docker compose -f docker/docker-compose.platform.yml exec django python manage.py panel_app createadmin --username admin --password admin123 --email admin@example.com
+
+IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 echo ""
 echo "=========================================="
 echo "Installation complete!"
 echo "=========================================="
 echo ""
-echo "CLI installed: djpaas"
-echo "  djpaas status"
-echo "  djpaas logs <project>"
-echo "  djpaas restart <project>"
-echo "  djpaas upgrade"
+echo "Panel URL:      http://$IP:8000"
+echo "Admin user:     admin / admin123"
+echo "CLI:            djpaas status"
+echo "Config:         /opt/deploydjango/.env"
 echo ""
-echo "To start the platform:"
-echo "  cd $INSTALL_DIR"
-echo "  docker compose -f docker/docker-compose.platform.yml up -d"
+echo "Next steps:"
+echo "  1. Open http://$IP:8000 and log in"
+echo "  2. Click 'New Project' to deploy your first Django app"
+echo "  3. Use 'djpaas' CLI to manage projects from the command line"
 echo ""
-echo "Then run migrations:"
-echo "  docker compose -f docker/docker-compose.platform.yml exec django python manage.py migrate"
-echo ""
-echo "Create admin user:"
-echo "  docker compose -f docker/docker-compose.platform.yml exec django python manage.py panel_app createadmin --username admin --password admin123 --email admin@example.com"
-echo ""
-echo "Panel will be available at: http://<server-ip>:8000"
-echo "Secrets saved in: $INSTALL_DIR/.env"
+echo "To stop:   docker compose -f docker/docker-compose.platform.yml down"
+echo "To remove: sudo ./uninstall.sh"
 echo ""
