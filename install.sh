@@ -97,10 +97,21 @@ EOF
 fi
 
 # Create systemd user service or docker-compose up
+# Install CLI
+echo "Installing djpaas CLI..."
+cp $INSTALL_DIR/scripts/djpaas /usr/local/bin/djpaas
+chmod +x /usr/local/bin/djpaas
+
 echo ""
 echo "=========================================="
 echo "Installation complete!"
 echo "=========================================="
+echo ""
+echo "CLI installed: djpaas"
+echo "  djpaas status"
+echo "  djpaas logs <project>"
+echo "  djpaas restart <project>"
+echo "  djpaas upgrade"
 echo ""
 echo "To start the platform:"
 echo "  cd $INSTALL_DIR"

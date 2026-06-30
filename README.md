@@ -6,8 +6,11 @@ Self-hosted PaaS for Django applications. Deploy Django apps from GitHub with on
 
 - **Phase 1**: Core build/deploy pipeline (clone, Dockerfile auto-gen, build, run, health-check, Caddy route)
 - **Phase 2**: Django control plane with full data models (Project, Deployment, Domain, EnvironmentVariable, WebhookEvent)
+- **Phase 3**: GitHub App integration (OAuth + webhook auto-registration)
 - **Phase 4**: Next.js + Tailwind GUI dashboard (project list, deploy button, logs, env vars, domains)
-- **Phase 6**: `install.sh` / `uninstall.sh` scripts for Ubuntu
+- **Phase 5**: Custom domains + TLS (DNS verification, Let's Encrypt via Caddy)
+- **Phase 6**: Production installer (`install.sh` / `uninstall.sh`)
+- **Phase 7**: CLI tool (`djpaas`), rate limiting, crash-loop detection, Dockerfile validation
 
 ## Tech Stack
 
@@ -36,32 +39,106 @@ docker compose exec django python manage.py panel_app createadmin --username adm
 sudo ./install.sh
 ```
 
+## CLI Tool
+
+The `djpaas` command is installed to `/usr/local/bin` during setup.
+
+```bash
+# Show all projects and their status
+djpaas status
+
+# Deploy a project manually
+djpaas deploy <project-slug>
+
+# Restart a running project
+djpaas restart <project-slug>
+
+# Stop/start a project
+djpaas stop <project-slug>
+djpaas start <project-slug>
+
+# Tail logs
+djpaas logs <project-slug>
+djpaas logs <project-slug> --tail 100
+
+# Upgrade the platform (pull new images, recreate containers)
+djpaas upgrade
+
+# Save API credentials for CLI
+djpaas login
+```
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│           Caddy v2 (Port 80/443)    │
-│    Reverse Proxy + Auto TLS         │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│      Django Control Plane (API)     │
-│   - Project Management              │
-│   - Build/Deploy Orchestration      │
-│   - Webhook Handler                 │
-└──────────────┬──────────────────────┘
-               │
-    ┌──────────┴──────────┐
-    │                     │
-┌───▼────┐         ┌─────▼─────┐
-│ Celery │         │   Redis   │
-│ Worker │         │   Queue   │
-└───┬────┘         └───────────┘
-    │
-    ├─── Clone Repo ────► Build Docker Image
-    ├─── Run Container ──► Health Check
-    ├─── Update Caddy ──► Route Traffic
-    └─── Store Metadata in Postgres
+                            Internet
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │     Caddy v2         │
+                    │  Port 80 / 443       │
+                    │  Reverse Proxy       │
+                    │  Auto TLS            │
+                    │  Dynamic Routes      │
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────▼───────────┐
+                    │  Django Control Plane│
+                    │  (DRF + Celery)      │
+                    │                      │
+                    │  Project Management  │
+                    │  Build/Deploy        │
+                    │  Webhook Handler     │
+                    │  Domain Manager      │
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+        ┌─────────┐     ┌─────────┐     ┌─────────┐
+        │ Celery  │     │  Redis  │     │Postgres │
+        │ Worker  │     │  Queue  │     │   DB    │
+        └────┬────┘     └─────────┘     └─────────┘
+             │
+             ▼
+    ┌─────────────────────────┐
+    │  User App Containers     │
+    │  (Docker, isolated,      │
+    │   resource-limited)      │
+    │                          │
+    │  app-<slug>.localhost    │
+    │  via Caddy               │
+    └─────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    VPS / Single Server                        │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                  Docker Network (bridge)                  │ │
+│  │                                                         │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐ │ │
+│  │  │  Caddy   │  │  Django  │  │  Celery  │  │  Redis │ │ │
+│  │  │  :80/:443│  │  :8000   │  │  Worker  │  │  :6379 │ │ │
+│  │  │  :2019   │  │          │  │          │  │        │ │ │
+│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └───┬────┘ │ │
+│  │       │             │             │             │      │ │
+│  │       │    ┌────────▼─────────────▼────────┐    │      │ │
+│  │       │    │      PostgreSQL :5432         │    │      │ │
+│  │       │    └───────────────────────────────┘    │      │ │
+│  │       │                                        │      │ │
+│  │  ┌────▼─────────────────────────────────────────┐│      │ │
+│  │  │   /var/run/docker.sock                       ││      │ │
+│  │  │   (Docker Engine - mounts into Django)       ││      │ │
+│  │  └───────────────────────────────────────────────┘│      │ │
+│  │                                                    │      │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐         │      │ │
+│  │  │ User App │  │ User App │  │ User App │  ...    │      │ │
+│  │  │ Container│  │ Container│  │ Container │         │      │ │
+│  │  │  :8000   │  │  :8001   │  │  :8002    │         │      │ │
+│  │  └──────────┘  └──────────┘  └──────────┘         │      │ │
+│  └─────────────────────────────────────────────────────────┘ │
+    └───────────────────────────────────────────────────────────┘
 ```
 
 ## Data Model
@@ -130,7 +207,62 @@ When no Dockerfile exists:
 - [x] Phase 4: Next.js GUI dashboard
 - [x] Phase 5: Custom domains + TLS
 - [x] Phase 6: Production installer (tested on clean Ubuntu)
-- [ ] Phase 7: Security hardening + CLI tool + documentation
+- [x] Phase 7: Security hardening + CLI tool + documentation
+
+## CLI Tool
+
+The `djpaas` command is installed to `/usr/local/bin` during setup.
+
+```bash
+djpaas status
+djpaas deploy <project-slug>
+djpaas restart <project-slug>
+djpaas stop <project-slug>
+djpaas start <project-slug>
+djpaas logs <project-slug>
+djpaas logs <project-slug> --tail 100
+djpaas upgrade
+djpaas login
+```
+
+## Troubleshooting
+
+**Build fails with "No module named 'psycopg2'"**
+- Ensure `libpq-dev` is installed. The auto-generated Dockerfile includes it by default.
+
+**Health check fails after deploy**
+- Check that your Django app binds to `0.0.0.0:8000`
+- Verify `ALLOWED_HOSTS` includes the incoming Host header
+- Check container logs: `docker logs app-<slug> --follow`
+
+**Caddy returns 404**
+- Verify the Caddy Admin API is reachable: `curl http://localhost:2019/config/`
+- Check that the domain route is registered in Caddy config
+
+**Webhook not triggering deploys**
+- Verify webhook is registered in GitHub repo settings
+- Check the webhook secret matches `GITHUB_WEBHOOK_SECRET` in `.env`
+
+**Celery tasks not running**
+- Check Redis: `docker compose exec redis redis-cli ping`
+- Verify Celery logs: `docker compose logs celery`
+
+**Permission denied on `.env`**
+- Re-run install script as root, or: `sudo chmod 600 .env`
+
+### Log Locations
+
+- Platform logs: `docker compose -f docker/docker-compose.platform.yml logs -f django`
+- Celery logs: `docker compose -f docker/docker-compose.platform.yml logs -f celery`
+- User app logs: `docker logs app-<project-slug> --follow`
+- Caddy logs: `docker logs panel-caddy --follow`
+
+### Reset
+
+```bash
+sudo ./uninstall.sh    # stops containers, optionally wipes volumes
+docker volume prune -f # remove Docker volumes
+```
 
 ## License
 

@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""
+DeployDjango CLI - djpaas
+
+Usage:
+    djpaas status
+    djpaas logs <project-slug>
+    djpaas restart <project-slug>
+    djpaas upgrade
+    djpaas deploy <project-slug>
+    djpaas stop <project-slug>
+    djpaas start <project-slug>
+
+Environment variables:
+    DJPAAS_API_URL    - Panel API URL (default: http://localhost:8000/api)
+    DJPAAS_API_TOKEN  - API token for authentication
+"""
+import sys
+import os
+import argparse
+import json
+import time
+import subprocess
+from pathlib import Path
+
+try:
+    import requests
+except ImportError:
+    print("Error: requests library required. Install with: pip install requests")
+    sys.exit(1)
+
+CONFIG_DIR = Path('/etc/djpaas')
+CONFIG_FILE = CONFIG_DIR / 'config.json'
+
+def load_config():
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_config(config):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+    os.chmod(CONFIG_FILE, 0o600)
+
+def get_api_url():
+    return os.getenv('DJPAAS_API_URL', 'http://localhost:8000/api')
+
+def get_auth_headers():
+    token = os.getenv('DJPAAS_API_TOKEN', '')
+    if not token:
+        config = load_config()
+        token = config.get('api_token', '')
+    if token:
+        return {'Authorization': f'Token {token}'}
+    return {}
+
+def api_request(method, endpoint, data=None):
+    url = f"{get_api_url()}{endpoint}"
+    headers = {**get_auth_headers(), 'Content-Type': 'application/json'}
+    try:
+        if method == 'GET':
+            r = requests.get(url, headers=headers, timeout=10)
+        elif method == 'POST':
+            r = requests.post(url, headers=headers, json=data, timeout=10)
+        elif method == 'DELETE':
+            r = requests.delete(url, headers=headers, timeout=10)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        return r
+    except requests.exceptions.ConnectionError:
+        print(f"Error: Cannot connect to panel at {url}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+def cmd_status(args):
+    r = api_request('GET', '/projects/')
+    if r.status_code == 401:
+        print("Error: Authentication required. Set DJPAAS_API_TOKEN or run 'djpaas login'")
+        sys.exit(1)
+    projects = r.json()
+    if not projects:
+        print("No projects found.")
+        return
+    
+    print(f"{'Name':<30} {'Status':<20} {'Branch':<15} {'Last Deploy'}")
+    print("-" * 85)
+    for p in projects:
+        last = p.get('last_deployed_at', 'Never')[:19] if p.get('last_deployed_at') else 'Never'
+        print(f"{p['name']:<30} {p['status']:<20} {p['git_branch']:<15} {last}")
+
+def cmd_logs(args):
+    slug = args.project
+    log_file = Path(f'/app/deployments/logs/{slug}-build.log')
+    if not log_file.exists():
+        # Try to get latest deployment log from API
+        r = api_request('GET', '/deployments/?project__slug=' + slug)
+        if r.status_code == 200:
+            deployments = r.json()
+            if deployments:
+                latest = deployments[0]
+                print(f"Latest deployment: {latest['git_commit_sha'][:12]} - {latest['status']}")
+                if latest.get('build_log'):
+                    print(latest['build_log'])
+                    return
+        print(f"No logs found for {slug}")
+        return
+    
+    print(f"=== Build logs for {slug} ===")
+    with open(log_file) as f:
+        content = f.read()
+        if args.tail:
+            lines = content.split('\n')
+            print('\n'.join(lines[-args.tail:]))
+        else:
+            print(content)
+
+def cmd_restart(args):
+    slug = args.project
+    r = api_request('GET', '/projects/?slug=' + slug)
+    if r.status_code != 200 or not r.json():
+        print(f"Project '{slug}' not found.")
+        sys.exit(1)
+    project = r.json()[0]
+    project_id = project['id']
+    
+    print(f"Restarting {slug}...")
+    r = api_request('POST', f'/projects/{project_id}/restart/')
+    if r.status_code == 200:
+        print("Restart initiated.")
+    else:
+        print(f"Error: {r.status_code} {r.text}")
+
+def cmd_deploy(args):
+    slug = args.project
+    r = api_request('GET', '/projects/?slug=' + slug)
+    if r.status_code != 200 or not r.json():
+        print(f"Project '{slug}' not found.")
+        sys.exit(1)
+    project = r.json()[0]
+    project_id = project['id']
+    
+    print(f"Deploying {slug}...")
+    r = api_request('POST', f'/projects/{project_id}/deploy/')
+    if r.status_code == 200:
+        print("Deploy initiated.")
+    else:
+        print(f"Error: {r.status_code} {r.text}")
+
+def cmd_stop(args):
+    slug = args.project
+    r = api_request('GET', '/projects/?slug=' + slug)
+    if r.status_code != 200 or not r.json():
+        print(f"Project '{slug}' not found.")
+        sys.exit(1)
+    project = r.json()[0]
+    project_id = project['id']
+    
+    print(f"Stopping {slug}...")
+    r = api_request('POST', f'/projects/{project_id}/stop/')
+    if r.status_code == 200:
+        print("Stop initiated.")
+    else:
+        print(f"Error: {r.status_code} {r.text}")
+
+def cmd_start(args):
+    slug = args.project
+    r = api_request('GET', '/projects/?slug=' + slug)
+    if r.status_code != 200 or not r.json():
+        print(f"Project '{slug}' not found.")
+        sys.exit(1)
+    project = r.json()[0]
+    project_id = project['id']
+    
+    print(f"Starting {slug}...")
+    r = api_request('POST', f'/projects/{project_id}/start/')
+    if r.status_code == 200:
+        print("Start initiated.")
+    else:
+        print(f"Error: {r.status_code} {r.text}")
+
+def cmd_upgrade(args):
+    print("Upgrading DeployDjango platform...")
+    install_dir = Path('/opt/deploydjango')
+    if not install_dir.exists():
+        print(f"Error: Installation directory {install_dir} not found.")
+        sys.exit(1)
+    
+    os.chdir(install_dir)
+    print("Pulling latest images...")
+    result = subprocess.run(
+        ['docker', 'compose', '-f', 'docker/docker-compose.platform.yml', 'pull'],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"Error pulling images: {result.stderr}")
+        sys.exit(1)
+    print(result.stdout)
+    
+    print("Restarting services...")
+    result = subprocess.run(
+        ['docker', 'compose', '-f', 'docker/docker-compose.platform.yml', 'up', '-d', '--force-recreate'],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"Error restarting: {result.stderr}")
+        sys.exit(1)
+    print("Upgrade complete.")
+
+def cmd_login(args):
+    print("DeployDjango CLI Login")
+    api_url = input(f"Panel API URL [{get_api_url()}]: ").strip()
+    if api_url:
+        os.environ['DJPAAS_API_URL'] = api_url
+    
+    token = input("API Token: ").strip()
+    if not token:
+        print("Error: Token required")
+        sys.exit(1)
+    
+    # Verify token
+    headers = {'Authorization': f'Token {token}'}
+    try:
+        r = requests.get(f"{get_api_url()}/auth/user/", headers=headers, timeout=10)
+        if r.status_code == 200:
+            config = load_config()
+            config['api_token'] = token
+            save_config(config)
+            print("Login successful. Token saved to /etc/djpaas/config.json")
+        else:
+            print("Error: Invalid token")
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+def main():
+    parser = argparse.ArgumentParser(description='DeployDjango CLI')
+    subparsers = parser.add_subparsers(dest='command', help='Command to run')
+    
+    subparsers.add_parser('status', help='Show status of all projects')
+    
+    logs_parser = subparsers.add_parser('logs', help='Show logs for a project')
+    logs_parser.add_argument('project', help='Project slug')
+    logs_parser.add_argument('--tail', '-n', type=int, help='Show last N lines')
+    
+    subparsers.add_parser('upgrade', help='Upgrade platform')
+    
+    deploy_parser = subparsers.add_parser('deploy', help='Deploy a project')
+    deploy_parser.add_argument('project', help='Project slug')
+    
+    restart_parser = subparsers.add_parser('restart', help='Restart a project')
+    restart_parser.add_argument('project', help='Project slug')
+    
+    stop_parser = subparsers.add_parser('stop', help='Stop a project')
+    stop_parser.add_argument('project', help='Project slug')
+    
+    start_parser = subparsers.add_parser('start', help='Start a project')
+    start_parser.add_argument('project', help='Project slug')
+    
+    subparsers.add_parser('login', help='Save API credentials')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    
+    commands = {
+        'status': cmd_status,
+        'logs': cmd_logs,
+        'restart': cmd_restart,
+        'deploy': cmd_deploy,
+        'stop': cmd_stop,
+        'start': cmd_start,
+        'upgrade': cmd_upgrade,
+        'login': cmd_login,
+    }
+    
+    commands[args.command](args)
+
+if __name__ == '__main__':
+    main()

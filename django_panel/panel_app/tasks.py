@@ -6,7 +6,7 @@ import requests
 from django.conf import settings
 from celery import shared_task
 from panel_app.models import Project, Deployment, Domain
-from panel_app.docker_client import build_image, run_container, stop_project
+from panel_app.docker_client import build_image, run_container, stop_project, check_crash_loop
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,17 @@ def deploy_project(self, project_id, deployment_id):
         deployment.save(update_fields=['status'])
         project.status = 'failed'
         project.save()
+        return
+    
+    time.sleep(5)
+    is_crash_looping, restart_count = check_crash_loop(project.container_name)
+    if is_crash_looping:
+        logger.warning(f"Project {project.slug} is crash-looping ({restart_count} restarts)")
+        project.status = 'failed'
+        project.save(update_fields=['status'])
+        deployment.status = 'failed'
+        deployment.save(update_fields=['status'])
+        stop_project(project)
         return
     
     project.container_id = container_id

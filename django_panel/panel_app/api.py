@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.conf import settings
@@ -34,7 +35,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             project.github_webhook_id = result
             project.save(update_fields=['github_webhook_id'])
     
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['get', 'post'], throttle_classes=[UserRateThrottle])
     def deploy(self, request, pk=None):
         project = self.get_object()
         deploy = Deployment.objects.create(

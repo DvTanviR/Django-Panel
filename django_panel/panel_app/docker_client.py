@@ -15,13 +15,27 @@ def get_docker_client():
     return _client
 
 def build_image(project, commit_sha, build_log_path):
+    from .dockerfile_validator import validate_dockerfile
     client = get_docker_client()
     tag = f"{project.slug}:{commit_sha[:12]}"
     workspace = settings.WORKSPACE_DIR / project.slug
+    dockerfile_path = workspace / 'Dockerfile'
     
     log_file = open(build_log_path, 'w')
     
     try:
+        if not dockerfile_path.exists():
+            from .dockerfile_generator import generate_dockerfile
+            dockerfile_content = generate_dockerfile(workspace, project)
+            dockerfile_path.write_text(dockerfile_content)
+            log_file.write("Generated Dockerfile\n")
+        else:
+            log_file.write("Using existing Dockerfile\n")
+        
+        if project.build_method == 'auto' or not dockerfile_path.exists():
+            content = dockerfile_path.read_text()
+            validate_dockerfile(content)
+        
         client.images.build(
             path=str(workspace),
             tag=tag,
@@ -104,7 +118,38 @@ def start_project(project):
         )
         deploy_project(project.id, deploy.id)
 
-def restart_project(project):
-    stop_project(project)
-    time.sleep(2)
-    start_project(project)
+def check_crash_loop(container_name, window_seconds=600, max_restarts=5):
+    client = get_docker_client()
+    try:
+        container = client.containers.get(container_name)
+        history = container.attrs['RestartCount']
+        started_at = container.attrs['State']['StartedAt']
+        
+        # Simple check: if restarted many times recently
+        if history >= max_restarts:
+            return True, history
+    except Exception:
+        pass
+    return False, 0
+
+def get_container_stats(container_name):
+    client = get_docker_client()
+    try:
+        container = client.containers.get(container_name)
+        stats = container.stats(stream=False)
+        cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
+        system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
+        cpu_percent = (cpu_delta / system_delta) * 100.0 if system_delta > 0 else 0
+        
+        mem_usage = stats['memory_stats']['usage']
+        mem_limit = stats['memory_stats']['limit']
+        mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0
+        
+        return {
+            'cpu_percent': round(cpu_percent, 2),
+            'memory_percent': round(mem_percent, 2),
+            'memory_usage_mb': round(mem_usage / 1024 / 1024, 2),
+            'restart_count': container.attrs['RestartCount'],
+        }
+    except Exception:
+        return None
